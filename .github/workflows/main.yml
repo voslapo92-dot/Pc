@@ -1,12 +1,17 @@
-name: RDP via Tailscale
+name: Windows 11 ARM RDP with Tailscale
 
 on:
-  workflow_dispatch: # Bisa dijalankan manual
+  workflow_dispatch:
+    inputs:
+      tailscale_authkey:
+        description: 'Tailscale Auth Key (tskey-auth-...)'
+        required: true
+        type: string
 
 jobs:
   rdp:
-    runs-on: windows-latest # Ganti jika runner kamu spesifik (misal: gha-win11-arm-rdp)
-    timeout-minutes: 60
+    runs-on: windows-11-arm
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
@@ -15,41 +20,73 @@ jobs:
       - name: Setup Tailscale
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci # Pastikan tag ini ada di ACL Tailscale kamu
+          authkey: ${{ inputs.tailscale_authkey }}
+          version: latest
+          args: --hostname=gha-win11-arm-rdp
 
       - name: Get Tailscale IP
-        shell: powershell
+        shell: pwsh
         run: |
           $ip = tailscale ip -4
-          echo "Tailscale IP: $ip"
-          echo "IP=$ip" >> $env:GITHUB_ENV
+          Write-Host "==========================================="
+          Write-Host " Tailscale IP   : $ip"
+          Write-Host " Username       : runneradmin"
+          Write-Host " Hostname       : gha-win11-arm-rdp"
+          Write-Host "==========================================="
+          echo "TAILSCALE_IP=$ip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Enable RDP
-        shell: powershell
+        shell: pwsh
         run: |
+          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+
+          # Firewall rule (hanya Tailscale subnet 100.64.0.0/10)
+          New-NetFirewallRule -DisplayName "RDP-Tailscale" -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow -RemoteAddress 100.64.0.0/10
+
+          # Start RDP service
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service TermService
 
       - name: Set Password for runneradmin
-        shell: powershell
+        shell: pwsh
         run: |
-          net user runneradmin "P@ssw0rd!123" # Ganti password sesuai keinginanmu
+          $password = "P@ssw0rd!$(Get-Random -Minimum 1000 -Maximum 9999)"
+          net user runneradmin "$password"
+          Write-Host "==========================================="
+          Write-Host " Password       : $password"
+          Write-Host "==========================================="
+          echo "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Create Connection Info
-        shell: powershell
+        shell: pwsh
         run: |
-          echo "======================================"
-          echo "RDP Info:"
-          echo "IP       : ${{ env.IP }}"
-          echo "Username : runneradmin"
-          echo "Password : P@ssw0rd!123"
-          echo "Hostname : $env:COMPUTERNAME"
-          echo "======================================"
+          $info = @"
+
+          ╔══════════════════════════════════════════════════════╗
+          ║         WINDOWS 11 ARM RDP - READY                   ║
+          ╠══════════════════════════════════════════════════════╣
+          ║  Host (Tailscale IP) : $env:TAILSCALE_IP
+          ║  Port                : 3389
+          ║  Username            : runneradmin
+          ║  Password            : $env:RDP_PASSWORD
+          ╠══════════════════════════════════════════════════════╣
+          ║  Pastikan device lokal sudah connect ke Tailnet      ║
+          ║  Tailscale yang sama!                                ║
+          ╚══════════════════════════════════════════════════════╝
+
+          "@
+          Write-Host $info -ForegroundColor Green
 
       - name: Keep Alive
-        shell: powershell
+        shell: pwsh
         run: |
-          echo "Menyambungkan RDP... Jangan tutup tab ini."
-          ping -t localhost
+          Write-Host "RDP session active. Menunggu hingga timeout (6 jam)..."
+          $elapsed = 0
+          while ($elapsed -lt 21600) {
+            Start-Sleep -Seconds 60
+            $elapsed += 60
+            $remaining = 21600 - $elapsed
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Remaining: $([math]::Floor($remaining/60)) minutes"
+          }
