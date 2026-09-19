@@ -1,0 +1,55 @@
+name: RDP via Tailscale
+
+on:
+  workflow_dispatch: # Bisa dijalankan manual
+
+jobs:
+  rdp:
+    runs-on: windows-latest # Ganti jika runner kamu spesifik (misal: gha-win11-arm-rdp)
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci # Pastikan tag ini ada di ACL Tailscale kamu
+
+      - name: Get Tailscale IP
+        shell: powershell
+        run: |
+          $ip = tailscale ip -4
+          echo "Tailscale IP: $ip"
+          echo "IP=$ip" >> $env:GITHUB_ENV
+
+      - name: Enable RDP
+        shell: powershell
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      - name: Set Password for runneradmin
+        shell: powershell
+        run: |
+          net user runneradmin "P@ssw0rd!123" # Ganti password sesuai keinginanmu
+
+      - name: Create Connection Info
+        shell: powershell
+        run: |
+          echo "======================================"
+          echo "RDP Info:"
+          echo "IP       : ${{ env.IP }}"
+          echo "Username : runneradmin"
+          echo "Password : P@ssw0rd!123"
+          echo "Hostname : $env:COMPUTERNAME"
+          echo "======================================"
+
+      - name: Keep Alive
+        shell: powershell
+        run: |
+          echo "Menyambungkan RDP... Jangan tutup tab ini."
+          ping -t localhost
